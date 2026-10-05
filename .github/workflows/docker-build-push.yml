@@ -98,7 +98,20 @@ jobs:
         env:
           IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
         run: docker pull --platform linux/amd64 "$IMAGE_REF"
+        
+      - name: Examiner les dépendances système APP3
+        if: ${{ inputs.image_name == 'app3' }}
+        env:
+          IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm --entrypoint sh "$IMAGE_REF" -c '
+            echo "=== Paquets dépendant de zlib ==="
+            apk info --rdepends zlib
 
+            echo "=== Bibliothèques utilisées par Node.js ==="
+            ldd /usr/local/bin/node
+          '
+          
       - name: Vérifier la sécurité de l'image Docker
         uses: anchore/scan-action@v7
         with:
