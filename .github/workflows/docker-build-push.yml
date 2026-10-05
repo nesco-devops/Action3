@@ -81,7 +81,8 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
-      - name: Construire et publier l'image
+            - name: Construire et publier l'image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.build_context }}
@@ -92,6 +93,20 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Télécharger l'image à analyser
+        env:
+          IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
+        run: docker pull --platform linux/amd64 "$IMAGE_REF"
+
+      - name: Vérifier la sécurité de l'image Docker
+        uses: anchore/scan-action@v7
+        with:
+          image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+          only-fixed: false
 
       - name: Récupérer le dépôt GitOps
         if: ${{ inputs.gitops_manifest != '' }}
