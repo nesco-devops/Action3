@@ -81,7 +81,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
-            - name: Construire et publier l'image
+      - name: Construire et publier l'image
         id: build
         uses: docker/build-push-action@v6
         with:
