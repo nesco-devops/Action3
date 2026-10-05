@@ -46,6 +46,15 @@ jobs:
       - name: Récupérer le code source
         uses: actions/checkout@v4
 
+      - name: Préparer Node.js pour le contrôle de sécurité
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Vérifier la sécurité des dépendances npm
+        working-directory: ${{ inputs.build_context }}
+        run: npm audit --audit-level=high
+
       - name: Préparer QEMU
         uses: docker/setup-qemu-action@v3
 
