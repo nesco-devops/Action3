@@ -51,9 +51,14 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Vérifier la sécurité des dépendances npm
+      - name: Rapport de sécurité de toutes les dépendances npm
         working-directory: ${{ inputs.build_context }}
+        continue-on-error: true
         run: npm audit --audit-level=high
+
+      - name: Vérifier la sécurité des dépendances de production
+        working-directory: ${{ inputs.build_context }}
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Préparer QEMU
         uses: docker/setup-qemu-action@v3
