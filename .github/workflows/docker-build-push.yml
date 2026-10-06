@@ -100,8 +100,6 @@ jobs:
           GRYPE_PLATFORM: linux/amd64
         with:
           image: registry:${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
-          registry-username: ${{ secrets.DOCKERHUB_USERNAME }}
-          registry-password: ${{ secrets.DOCKERHUB_TOKEN }}
           fail-build: true
           severity-cutoff: high
           output-format: table
@@ -113,8 +111,6 @@ jobs:
           GRYPE_PLATFORM: linux/arm64
         with:
           image: registry:${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
-          registry-username: ${{ secrets.DOCKERHUB_USERNAME }}
-          registry-password: ${{ secrets.DOCKERHUB_TOKEN }}
           fail-build: true
           severity-cutoff: high
           output-format: table
