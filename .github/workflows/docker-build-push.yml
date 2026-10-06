@@ -99,41 +99,6 @@ jobs:
           IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
         run: docker pull --platform linux/amd64 "$IMAGE_REF"
      
-      - name: Examiner les dépendances système du backend
-        if: ${{ inputs.image_name == 'appgestion-backend' }}
-        env:
-          IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
-        run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -c '
-            echo "=== Paquets dépendant de zlib ==="
-            apk info --rdepends zlib
-
-            echo "=== Bibliothèques utilisées par Node.js ==="
-            ldd /usr/local/bin/node
-
-            echo "=== Modules natifs du backend ==="
-            find /app/node_modules -type f -name "*.node" -print
-          '    
-       
-      - name: Examiner les dépendances système du frontend
-        if: ${{ inputs.image_name == 'appgestion-frontend' }}
-        env:
-          IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
-        run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -c '
-            echo "=== Paquets dépendant de zlib ==="
-            apk info --rdepends zlib
-
-            echo "=== Bibliothèques utilisées par Node.js ==="
-            ldd /usr/local/bin/node
-
-            echo "=== Bibliothèques des modules natifs ==="
-            find /app/node_modules -type f -name "*.node" \
-              -exec sh -c '"'"'
-                echo "--- $1"
-                ldd "$1"
-              '"'"' sh {} \;
-          '
       - name: Vérifier la sécurité de l'image Docker
         uses: anchore/scan-action@v7
         with:
