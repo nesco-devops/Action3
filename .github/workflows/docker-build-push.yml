@@ -94,15 +94,27 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Télécharger l'image à analyser
-        env:
-          IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
-        run: docker pull --platform linux/amd64 "$IMAGE_REF"
-     
-      - name: Vérifier la sécurité de l'image Docker
+      - name: Vérifier l'image Docker AMD64
         uses: anchore/scan-action@v7
+        env:
+          GRYPE_PLATFORM: linux/amd64
         with:
-          image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
+          image: registry:${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
+          registry-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          registry-password: ${{ secrets.DOCKERHUB_TOKEN }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+          only-fixed: false
+
+      - name: Vérifier l'image Docker ARM64
+        uses: anchore/scan-action@v7
+        env:
+          GRYPE_PLATFORM: linux/arm64
+        with:
+          image: registry:${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
+          registry-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          registry-password: ${{ secrets.DOCKERHUB_TOKEN }}
           fail-build: true
           severity-cutoff: high
           output-format: table
