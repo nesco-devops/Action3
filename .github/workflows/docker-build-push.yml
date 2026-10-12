@@ -45,7 +45,21 @@ jobs:
     steps:
       - name: Récupérer le code source
         uses: actions/checkout@v4
-
+        
+      - name: Vérifier le code avec Semgrep (SAST)
+        env:
+          SCAN_PATH: ${{ inputs.build_context }}
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            --workdir /src \
+            semgrep/semgrep:latest \
+            semgrep scan \
+              --config p/ci \
+              --error \
+              --metrics off \
+              "$SCAN_PATH"
+              
       - name: Préparer Node.js pour le contrôle de sécurité
         uses: actions/setup-node@v4
         with:
