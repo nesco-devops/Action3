@@ -103,13 +103,35 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          
+      - name: Installer Skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Préparer les archives pour chaque architecture
+        env:
+          IMAGE_ARCHIVE: ${{ runner.temp }}/image.tar
+          AMD64_ARCHIVE: ${{ runner.temp }}/image-amd64.tar
+          ARM64_ARCHIVE: ${{ runner.temp }}/image-arm64.tar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          skopeo --override-os linux --override-arch amd64 copy \
+            "oci-archive:$IMAGE_ARCHIVE" \
+            "docker-archive:$AMD64_ARCHIVE"
+
+          skopeo --override-os linux --override-arch arm64 copy \
+            "oci-archive:$IMAGE_ARCHIVE" \
+            "docker-archive:$ARM64_ARCHIVE"
 
       - name: Vérifier l'image Docker AMD64
         uses: anchore/scan-action@v7
         env:
           GRYPE_PLATFORM: linux/amd64
         with:
-          image: oci-archive:${{ runner.temp }}/image.tar
+          image: docker-archive:${{ runner.temp }}/image-amd64.tar
           fail-build: true
           severity-cutoff: high
           output-format: table
@@ -120,16 +142,11 @@ jobs:
         env:
           GRYPE_PLATFORM: linux/arm64
         with:
-          image: oci-archive:${{ runner.temp }}/image.tar
+          image: docker-archive:${{ runner.temp }}/image-arm64.tar
           fail-build: true
           severity-cutoff: high
           output-format: table
           only-fixed: false
-
-      - name: Installer Skopeo pour la publication
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y skopeo
 
       - name: Publier les images validées sur Docker Hub
         env:
