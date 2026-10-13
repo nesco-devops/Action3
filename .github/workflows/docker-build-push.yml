@@ -80,12 +80,6 @@ jobs:
       - name: Préparer Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Se connecter à Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Générer les tags Docker
         id: metadata
         uses: docker/metadata-action@v5
@@ -95,25 +89,49 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
-      - name: Construire et publier l'image
+      - name: Construire les images sans publication
         id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile }}
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar
+          provenance: false
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          
+      - name: Installer Skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Préparer les archives pour chaque architecture
+        env:
+          IMAGE_ARCHIVE: ${{ runner.temp }}/image.tar
+          AMD64_ARCHIVE: ${{ runner.temp }}/image-amd64.tar
+          ARM64_ARCHIVE: ${{ runner.temp }}/image-arm64.tar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          skopeo --override-os linux --override-arch amd64 copy \
+            "oci-archive:$IMAGE_ARCHIVE" \
+            "docker-archive:$AMD64_ARCHIVE"
+
+          skopeo --override-os linux --override-arch arm64 copy \
+            "oci-archive:$IMAGE_ARCHIVE" \
+            "docker-archive:$ARM64_ARCHIVE"
 
       - name: Vérifier l'image Docker AMD64
         uses: anchore/scan-action@v7
         env:
           GRYPE_PLATFORM: linux/amd64
         with:
-          image: registry:${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
+          image: docker-archive:${{ runner.temp }}/image-amd64.tar
           fail-build: true
           severity-cutoff: high
           output-format: table
@@ -124,11 +142,41 @@ jobs:
         env:
           GRYPE_PLATFORM: linux/arm64
         with:
-          image: registry:${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}
+          image: docker-archive:${{ runner.temp }}/image-arm64.tar
           fail-build: true
           severity-cutoff: high
           output-format: table
           only-fixed: false
+
+      - name: Publier les images validées sur Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          IMAGE_TAGS: ${{ steps.metadata.outputs.tags }}
+          IMAGE_ARCHIVE: ${{ runner.temp }}/image.tar
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/skopeo-auth.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$REGISTRY_AUTH_FILE"' EXIT
+
+          printf '%s' "$DOCKERHUB_TOKEN" |
+            skopeo login \
+              --authfile "$REGISTRY_AUTH_FILE" \
+              --username "$DOCKERHUB_USERNAME" \
+              --password-stdin docker.io
+
+          while IFS= read -r IMAGE_TAG; do
+            [[ -z "$IMAGE_TAG" ]] && continue
+
+            echo "Publication de $IMAGE_TAG"
+
+            skopeo copy \
+              --all \
+              --authfile "$REGISTRY_AUTH_FILE" \
+              "oci-archive:$IMAGE_ARCHIVE" \
+              "docker://docker.io/$IMAGE_TAG"
+          done <<< "$IMAGE_TAGS"
 
       - name: Récupérer le dépôt GitOps
         if: ${{ inputs.gitops_manifest != '' }}
