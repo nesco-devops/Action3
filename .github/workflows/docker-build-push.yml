@@ -103,6 +103,13 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Examiner les entrées de l'archive OCI
+        env:
+          IMAGE_ARCHIVE: ${{ runner.temp }}/image.tar
+        run: |
+          set -euo pipefail
+          tar -xOf "$IMAGE_ARCHIVE" index.json | python3 -m json.tool
           
       - name: Installer Skopeo
         run: |
