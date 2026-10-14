@@ -45,6 +45,27 @@ jobs:
     steps:
       - name: Récupérer le code source
         uses: actions/checkout@v4
+      - name: Rechercher les secrets avec Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          format: table
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '1'
+          skip-dirs: .git,node_modules,.next
+
+      - name: Vérifier les configurations avec Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.build_context }}
+          scanners: misconfig
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          skip-dirs: .git,node_modules,.next
         
       - name: Vérifier le code avec Semgrep (SAST)
         env:
