@@ -86,7 +86,7 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
       - name: Construire les images sans publication
@@ -103,13 +103,6 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Examiner les entrées de l'archive OCI
-        env:
-          IMAGE_ARCHIVE: ${{ runner.temp }}/image.tar
-        run: |
-          set -euo pipefail
-          tar -xOf "$IMAGE_ARCHIVE" index.json | python3 -m json.tool
           
       - name: Installer Skopeo
         run: |
