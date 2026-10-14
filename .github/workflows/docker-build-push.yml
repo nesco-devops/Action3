@@ -99,7 +99,7 @@ jobs:
           push: false
           outputs: type=oci,dest=${{ runner.temp }}/image.tar
           provenance: false
-          tags: ${{ steps.metadata.outputs.tags }}
+          tags: local-scan:validated
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
