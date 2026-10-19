@@ -232,26 +232,43 @@ jobs:
           echo "Nouvelle image : ${NEW_IMAGE}"
           grep -n "image:" "${MANIFEST_PATH}"
 
-      - name: Créer une pull request GitOps
+      - name: Commit GitOps directement sur main
         if: ${{ inputs.gitops_manifest != '' }}
-        id: gitops_pr
-        uses: peter-evans/create-pull-request@v8
-        with:
-          token: ${{ secrets.GITOPS_TOKEN }}
-          path: gitops
-          base: main
-          branch: gitops/${{ inputs.image_name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          add-paths: ${{ inputs.gitops_manifest }}
-          commit-message: "chore: update ${{ inputs.image_name }} image"
-          title: "Déployer ${{ inputs.image_name }} — ${{ github.sha }}"
-          body: |
-            Mise à jour automatique du manifeste :
-            `${{ inputs.gitops_manifest }}`
+        id: gitops_commit
+        working-directory: gitops
+        env:
+          MANIFEST: ${{ inputs.gitops_manifest }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
 
-            Commit source : `${{ github.sha }}`
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-            Exécution du pipeline :
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          git add -- "$MANIFEST"
 
-            Vérifier les contrôles Kustomize et Trivy avant fusion.
-         
+          if git diff --cached --quiet; then
+            echo "Aucun changement dans $MANIFEST, rien à commiter."
+            exit 0
+          fi
+
+          git commit \
+            -m "chore: update ${IMAGE_NAME} image" \
+            -m "Commit source : ${SOURCE_SHA}" \
+            -m "Pipeline : ${RUN_URL}"
+
+          # Retry en cas de push concurrent sur main
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase --autostash origin main && git push origin HEAD:main; then
+              echo "Push réussi (tentative $attempt)"
+              echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Échec du push, nouvelle tentative dans $((attempt * 5))s..."
+            sleep $((attempt * 5))
+          done
+
+          echo "Impossible de pousser sur main après 5 tentatives."
+          exit 1
