@@ -55,6 +55,9 @@ jobs:
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           exit-code: '1'
           skip-dirs: .git,node_modules,.next
+          
+      - name: Préparer le dossier des rapports
+        run: mkdir -p "$RUNNER_TEMP/security-reports"
 
       - name: Vérifier les configurations avec Trivy
         uses: aquasecurity/trivy-action@v0.36.0
@@ -87,13 +90,23 @@ jobs:
           node-version: '22'
 
       - name: Rapport de sécurité de toutes les dépendances npm
+        id: npm_all
         working-directory: ${{ inputs.build_context }}
         continue-on-error: true
-        run: npm audit --audit-level=high
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm audit --audit-level=high 2>&1 \
+            | tee "$RUNNER_TEMP/security-reports/npm-toutes-dependances.txt"
 
       - name: Vérifier la sécurité des dépendances de production
+        id: npm_production
         working-directory: ${{ inputs.build_context }}
-        run: npm audit --omit=dev --audit-level=high
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm audit --omit=dev --audit-level=high 2>&1 \
+            | tee "$RUNNER_TEMP/security-reports/npm-production.txt"
 
       - name: Préparer QEMU
         uses: docker/setup-qemu-action@v3
@@ -272,3 +285,12 @@ jobs:
 
           echo "Impossible de pousser sur main après 5 tentatives."
           exit 1
+          
+      - name: Conserver les rapports de sécurité
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-${{ inputs.image_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/security-reports/
+          retention-days: 30
+          if-no-files-found: warn
