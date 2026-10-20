@@ -44,8 +44,18 @@ jobs:
 
     steps:
       - name: Récupérer le code source
+        id: checkout
         uses: actions/checkout@v4
+
+      - name: Préparer le dossier des rapports
+        id: prepare_reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/security-reports"
+
       - name: Rechercher les secrets avec Trivy
+        id: trivy_secrets
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -57,20 +67,26 @@ jobs:
           skip-dirs: .git,node_modules,.next
 
       - name: Vérifier les configurations avec Trivy
+        id: trivy_config
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: ${{ inputs.build_context }}
           scanners: misconfig
           format: table
+          output: ${{ runner.temp }}/security-reports/trivy-configurations.txt
           severity: HIGH,CRITICAL
           exit-code: '1'
           skip-dirs: .git,node_modules,.next
-        
+
       - name: Vérifier le code avec Semgrep (SAST)
+        id: semgrep
         env:
           SCAN_PATH: ${{ inputs.build_context }}
+        shell: bash
         run: |
+          set -euo pipefail
+
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/src:ro" \
             --workdir /src \
@@ -79,26 +95,42 @@ jobs:
               --config p/ci \
               --error \
               --metrics off \
-              "$SCAN_PATH"
-              
+              "$SCAN_PATH" 2>&1 \
+            | tee "$RUNNER_TEMP/security-reports/semgrep.txt"
+
       - name: Préparer Node.js pour le contrôle de sécurité
+        id: node_setup
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Rapport de sécurité de toutes les dépendances npm
+        id: npm_all
         working-directory: ${{ inputs.build_context }}
         continue-on-error: true
-        run: npm audit --audit-level=high
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm audit --audit-level=high 2>&1 \
+            | tee "$RUNNER_TEMP/security-reports/npm-toutes-dependances.txt"
 
       - name: Vérifier la sécurité des dépendances de production
+        id: npm_production
         working-directory: ${{ inputs.build_context }}
-        run: npm audit --omit=dev --audit-level=high
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm audit --omit=dev --audit-level=high 2>&1 \
+            | tee "$RUNNER_TEMP/security-reports/npm-production.txt"
 
       - name: Préparer QEMU
+        id: qemu
         uses: docker/setup-qemu-action@v3
 
       - name: Préparer Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Générer les tags Docker
@@ -124,13 +156,17 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          
+
       - name: Installer Skopeo
+        id: skopeo
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y skopeo
 
       - name: Préparer les archives pour chaque architecture
+        id: archives
         env:
           IMAGE_ARCHIVE: ${{ runner.temp }}/image.tar
           AMD64_ARCHIVE: ${{ runner.temp }}/image-amd64.tar
@@ -148,6 +184,7 @@ jobs:
             "docker-archive:$ARM64_ARCHIVE"
 
       - name: Vérifier l'image Docker AMD64
+        id: grype_amd64
         uses: anchore/scan-action@v7
         env:
           GRYPE_PLATFORM: linux/amd64
@@ -156,9 +193,11 @@ jobs:
           fail-build: true
           severity-cutoff: high
           output-format: table
+          output-file: ${{ runner.temp }}/security-reports/grype-amd64.txt
           only-fixed: false
 
       - name: Vérifier l'image Docker ARM64
+        id: grype_arm64
         uses: anchore/scan-action@v7
         env:
           GRYPE_PLATFORM: linux/arm64
@@ -167,9 +206,11 @@ jobs:
           fail-build: true
           severity-cutoff: high
           output-format: table
+          output-file: ${{ runner.temp }}/security-reports/grype-arm64.txt
           only-fixed: false
 
       - name: Publier les images validées sur Docker Hub
+        id: publish
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -200,6 +241,7 @@ jobs:
           done <<< "$IMAGE_TAGS"
 
       - name: Récupérer le dépôt GitOps
+        id: gitops_checkout
         if: ${{ inputs.gitops_manifest != '' }}
         uses: actions/checkout@v4
         with:
@@ -209,6 +251,7 @@ jobs:
           path: gitops
 
       - name: Mettre à jour le tag dans GitOps
+        id: gitops_update
         if: ${{ inputs.gitops_manifest != '' }}
         env:
           IMAGE_REPOSITORY: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}
@@ -220,27 +263,28 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::7}"
           NEW_IMAGE="${IMAGE_REPOSITORY}:sha-${SHORT_SHA}"
 
-          if [[ ! -f "${MANIFEST_PATH}" ]]; then
-            echo "Manifeste introuvable : ${MANIFEST_PATH}"
+          if [[ ! -f "$MANIFEST_PATH" ]]; then
+            echo "Manifeste introuvable : $MANIFEST_PATH"
             exit 1
           fi
 
           sed -E -i \
             "s|^([[:space:]]*image:[[:space:]]*).*$|\1${NEW_IMAGE}|" \
-            "${MANIFEST_PATH}"
+            "$MANIFEST_PATH"
 
-          echo "Nouvelle image : ${NEW_IMAGE}"
-          grep -n "image:" "${MANIFEST_PATH}"
+          echo "Nouvelle image : $NEW_IMAGE"
+          grep -n "image:" "$MANIFEST_PATH"
 
       - name: Commit GitOps directement sur main
-        if: ${{ inputs.gitops_manifest != '' }}
         id: gitops_commit
+        if: ${{ inputs.gitops_manifest != '' }}
         working-directory: gitops
         env:
           MANIFEST: ${{ inputs.gitops_manifest }}
           IMAGE_NAME: ${{ inputs.image_name }}
           SOURCE_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -251,6 +295,7 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "Aucun changement dans $MANIFEST, rien à commiter."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -259,16 +304,190 @@ jobs:
             -m "Commit source : ${SOURCE_SHA}" \
             -m "Pipeline : ${RUN_URL}"
 
-          # Retry en cas de push concurrent sur main
           for attempt in 1 2 3 4 5; do
             if git pull --rebase --autostash origin main && git push origin HEAD:main; then
               echo "Push réussi (tentative $attempt)"
+              echo "changed=true" >> "$GITHUB_OUTPUT"
               echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+
             echo "Échec du push, nouvelle tentative dans $((attempt * 5))s..."
             sleep $((attempt * 5))
           done
 
           echo "Impossible de pousser sur main après 5 tentatives."
           exit 1
+
+      - name: Générer le récapitulatif du pipeline
+        id: recap
+        if: ${{ always() }}
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+          PIPELINE_STATUS: ${{ job.status }}
+          APPLICATION: ${{ inputs.image_name }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          GITOPS_MANIFEST: ${{ inputs.gitops_manifest }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          steps = json.loads(os.environ["STEPS_JSON"])
+          folder = Path(os.environ["RUNNER_TEMP"]) / "security-reports"
+          folder.mkdir(parents=True, exist_ok=True)
+
+          checks = [
+              ("checkout", "Récupération du code"),
+              ("prepare_reports", "Préparation des rapports"),
+              ("trivy_secrets", "Trivy — secrets"),
+              ("trivy_config", "Trivy — configurations"),
+              ("semgrep", "Semgrep — code source"),
+              ("node_setup", "Préparation Node.js"),
+              ("npm_all", "Audit npm complet — informatif"),
+              ("npm_production", "Audit npm production — bloquant"),
+              ("qemu", "Préparation QEMU"),
+              ("buildx", "Préparation Buildx"),
+              ("metadata", "Génération des tags Docker"),
+              ("build", "Construction des images"),
+              ("skopeo", "Installation Skopeo"),
+              ("archives", "Préparation des archives AMD64/ARM64"),
+              ("grype_amd64", "Grype AMD64"),
+              ("grype_arm64", "Grype ARM64"),
+              ("publish", "Publication Docker Hub"),
+              ("gitops_checkout", "Récupération du dépôt GitOps"),
+              ("gitops_update", "Modification du manifeste GitOps"),
+              ("gitops_commit", "Commit et push GitOps"),
+          ]
+
+          statuses = {
+              "success": "RÉUSSI",
+              "failure": "ÉCHEC",
+              "skipped": "IGNORÉ",
+              "cancelled": "ANNULÉ",
+          }
+
+          pipeline_status = os.environ["PIPELINE_STATUS"]
+          date = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+          lines = [
+              "RÉCAPITULATIF DU PIPELINE",
+              "========================",
+              "",
+              f"Date UTC : {date}",
+              f"Application : {os.environ['APPLICATION']}",
+              f"Dépôt : {os.environ['REPOSITORY']}",
+              f"Branche : {os.environ['SOURCE_BRANCH']}",
+              f"Commit : {os.environ['SOURCE_SHA']}",
+              f"Tag associé au commit : sha-{os.environ['SOURCE_SHA'][:7]}",
+              f"État avant génération et archivage : {statuses.get(pipeline_status, pipeline_status)}",
+              f"Exécution et logs : {os.environ['RUN_URL']}",
+              "",
+              "RÉSULTATS DES ÉTAPES",
+              "-------------------",
+          ]
+
+          blocking_failures = []
+
+          for step_id, label in checks:
+              step = steps.get(step_id, {})
+              outcome = step.get("outcome", "skipped")
+              status = statuses.get(outcome, outcome)
+
+              if step_id == "npm_all" and outcome == "failure":
+                  status = "ÉCHEC INFORMATIF — non bloquant"
+              elif outcome == "failure":
+                  blocking_failures.append(label)
+
+              if step_id == "gitops_commit" and outcome == "success":
+                  changed = step.get("outputs", {}).get("changed")
+                  if changed == "false":
+                      status = "RÉUSSI — aucun changement nécessaire"
+                  elif changed == "true":
+                      status = "RÉUSSI — changement poussé"
+
+              if (
+                  step_id.startswith("gitops_")
+                  and not os.environ["GITOPS_MANIFEST"]
+                  and outcome == "skipped"
+              ):
+                  status = "NON DEMANDÉ — manifeste GitOps vide"
+
+              lines.append(f"- {label} : {status}")
+
+          lines += ["", "ÉCHECS BLOQUANTS", "----------------"]
+
+          if blocking_failures:
+              lines.extend(f"- {label}" for label in blocking_failures)
+          else:
+              lines.append("- Aucun échec bloquant identifié dans les étapes ci-dessus.")
+
+          secret_outcome = steps.get("trivy_secrets", {}).get("outcome", "skipped")
+          secret_status = statuses.get(secret_outcome, secret_outcome)
+
+          secret_text = (
+              "TRIVY — RECHERCHE DE SECRETS\n"
+              f"Résultat de l'étape : {secret_status}\n\n"
+              "Les valeurs et extraits de secrets ne sont pas archivés.\n"
+              "Un échec peut correspondre à une détection ou à une erreur technique.\n"
+              "Consulter les logs de l'étape pour le diagnostic.\n"
+          )
+
+          (folder / "trivy-secrets-statut.txt").write_text(
+              secret_text,
+              encoding="utf-8",
+          )
+
+          lines += [
+              "",
+              "RAPPORTS DISPONIBLES",
+              "-------------------",
+          ]
+
+          for report in sorted(folder.glob("*.txt")):
+              if report.name != "recapitulatif.txt":
+                  lines.append(f"- {report.name}")
+
+          lines += [
+              "",
+              "LIMITES ET INTERPRÉTATION",
+              "------------------------",
+              "- Une étape ignorée n'a pas été validée.",
+              "- Un rapport absent peut correspondre à une étape ignorée ou à une erreur technique.",
+              "- L'audit npm complet est informatif ; celui de production est bloquant.",
+              "- Les scans de configurations et d'images bloquent sur High/Critical.",
+              "- Une réussite ne garantit pas l'absence de toute vulnérabilité.",
+              "- Les détails techniques sont disponibles dans les rapports et les logs du run.",
+              "- Le scan des secrets est archivé sous forme de statut uniquement.",
+              "- Un push GitOps réussi ne confirme pas la réussite du déploiement ArgoCD.",
+              "- Le statut final du run peut encore changer si la génération ou l'archivage échoue.",
+          ]
+
+          text = "\n".join(lines) + "\n"
+
+          (folder / "recapitulatif.txt").write_text(
+              text,
+              encoding="utf-8",
+          )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("```text\n" + text + "```\n")
+
+          print(text)
+          PY
+
+      - name: Conserver les rapports de sécurité
+        id: upload_reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-${{ inputs.image_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/security-reports/
+          retention-days: 30
+          if-no-files-found: warn
