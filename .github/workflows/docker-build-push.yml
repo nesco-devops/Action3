@@ -33,6 +33,15 @@ on:
 
       GITOPS_TOKEN:
         required: false
+        
+      SMTP_USERNAME:
+        required: false
+        
+      SMTP_PASSWORD:
+        required: false
+        
+      EMAIL_TO:
+        required: false
 
 jobs:
   build-and-push:
@@ -491,3 +500,89 @@ jobs:
           path: ${{ runner.temp }}/security-reports/
           retention-days: 30
           if-no-files-found: warn
+        
+      - name: Envoyer le récapitulatif par e-mail
+        id: send_email
+        if: ${{ always() && steps.recap.outcome == 'success' }}
+        shell: bash
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          APPLICATION: ${{ inputs.image_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import ssl
+          import smtplib
+          from pathlib import Path
+          from email.message import EmailMessage
+
+          username = os.environ.get("SMTP_USERNAME", "")
+          password = os.environ.get("SMTP_PASSWORD", "")
+          recipient = os.environ.get("EMAIL_TO", "")
+
+          if not all([username, password, recipient]):
+              print("Notification ignorée : configuration SMTP incomplète.")
+              raise SystemExit(1)
+
+          report = (
+              Path(os.environ["RUNNER_TEMP"])
+              / "security-reports"
+              / "recapitulatif.txt"
+          )
+
+          if not report.is_file():
+              raise FileNotFoundError(
+                  f"Rapport introuvable : {report}"
+              )
+
+          content = report.read_text(encoding="utf-8")
+
+          application = os.environ["APPLICATION"]
+
+          # Déterminer le statut à partir du récapitulatif.
+          # Le statut final peut évoluer après sa génération.
+          if "ÉCHEC INFORMATIF" in content:
+              print("Présence possible d'un échec informatif.")
+
+          message = EmailMessage()
+          message["From"] = username
+          message["To"] = recipient
+          message["Subject"] = (
+              f"[DevSecOps] Rapport de sécurité - {application}"
+          )
+
+          message.set_content(
+              "Bonjour,\n\n"
+              "Voici le récapitulatif automatique du pipeline "
+              "DevSecOps.\n\n"
+              + content
+              + "\nLien GitHub Actions :\n"
+              + os.environ["RUN_URL"]
+              + "\n\nNotification automatique Action3.\n"
+          )
+
+          # Ajouter également le rapport en pièce jointe.
+          message.add_attachment(
+              content.encode("utf-8"),
+              maintype="text",
+              subtype="plain",
+              filename="recapitulatif.txt"
+          )
+
+          context = ssl.create_default_context()
+
+          with smtplib.SMTP_SSL(
+              "smtp.gmail.com",
+              465,
+              context=context,
+              timeout=30
+          ) as smtp:
+              smtp.login(username, password)
+              smtp.send_message(message)
+
+          print("E-mail envoyé avec succès.")
+          PY
+
